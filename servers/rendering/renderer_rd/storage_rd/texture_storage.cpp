@@ -422,8 +422,7 @@ TextureStorage::TextureStorage() {
 		tformat.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT | RD::TEXTURE_USAGE_VRS_ATTACHMENT_BIT;
 		tformat.texture_type = RD::TEXTURE_TYPE_2D;
 		if (!RD::get_singleton()->has_feature(RD::SUPPORTS_ATTACHMENT_VRS)) {
-			tformat.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT;
-			tformat.format = RD::DATA_FORMAT_R8_UNORM;
+			tformat.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_CAN_UPDATE_BIT;
 		}
 
 		Vector<uint8_t> pv;
@@ -1854,10 +1853,10 @@ void TextureStorage::decal_free(RID p_rid) {
 	decal_owner.free(p_rid);
 }
 
-void TextureStorage::decal_set_extents(RID p_decal, const Vector3 &p_extents) {
+void TextureStorage::decal_set_size(RID p_decal, const Vector3 &p_size) {
 	Decal *decal = decal_owner.get_or_null(p_decal);
 	ERR_FAIL_COND(!decal);
-	decal->extents = p_extents;
+	decal->size = p_size;
 	decal->dependency.changed_notify(Dependency::DEPENDENCY_CHANGED_AABB);
 }
 
@@ -1907,7 +1906,7 @@ void TextureStorage::decal_set_cull_mask(RID p_decal, uint32_t p_layers) {
 	Decal *decal = decal_owner.get_or_null(p_decal);
 	ERR_FAIL_COND(!decal);
 	decal->cull_mask = p_layers;
-	decal->dependency.changed_notify(Dependency::DEPENDENCY_CHANGED_AABB);
+	decal->dependency.changed_notify(Dependency::DEPENDENCY_CHANGED_DECAL);
 }
 
 void TextureStorage::decal_set_distance_fade(RID p_decal, bool p_enabled, float p_begin, float p_length) {
@@ -1950,7 +1949,14 @@ AABB TextureStorage::decal_get_aabb(RID p_decal) const {
 	Decal *decal = decal_owner.get_or_null(p_decal);
 	ERR_FAIL_COND_V(!decal, AABB());
 
-	return AABB(-decal->extents, decal->extents * 2.0);
+	return AABB(-decal->size / 2, decal->size);
+}
+
+uint32_t TextureStorage::decal_get_cull_mask(RID p_decal) const {
+	Decal *decal = decal_owner.get_or_null(p_decal);
+	ERR_FAIL_COND_V(!decal, 0);
+
+	return decal->cull_mask;
 }
 
 Dependency *TextureStorage::decal_get_dependency(RID p_decal) {
@@ -2313,7 +2319,7 @@ void TextureStorage::update_decal_buffer(const PagedArray<RID> &p_decals, const 
 
 		DecalData &dd = decals[i];
 
-		Vector3 decal_extents = decal->extents;
+		Vector3 decal_extents = decal->size / 2;
 
 		Transform3D scale_xform;
 		scale_xform.basis.scale(decal_extents);

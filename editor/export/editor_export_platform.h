@@ -91,6 +91,7 @@ private:
 	Vector<ExportMessage> messages;
 
 	void _export_find_resources(EditorFileSystemDirectory *p_dir, HashSet<String> &p_paths);
+	void _export_find_customized_resources(const Ref<EditorExportPreset> &p_preset, EditorFileSystemDirectory *p_dir, EditorExportPreset::FileExportMode p_mode, HashSet<String> &p_paths);
 	void _export_find_dependencies(const String &p_path, HashSet<String> &p_paths);
 
 	static Error _save_pack_file(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total, const Vector<String> &p_enc_in_filters, const Vector<String> &p_enc_ex_filters, const Vector<uint8_t> &p_key);
@@ -112,6 +113,7 @@ private:
 	bool _export_customize_array(Array &array, LocalVector<Ref<EditorExportPlugin>> &customize_resources_plugins);
 	bool _export_customize_object(Object *p_object, LocalVector<Ref<EditorExportPlugin>> &customize_resources_plugins);
 	bool _export_customize_scene_resources(Node *p_root, Node *p_node, LocalVector<Ref<EditorExportPlugin>> &customize_resources_plugins);
+	bool _is_editable_ancestor(Node *p_root, Node *p_node);
 
 	String _export_customize(const String &p_path, LocalVector<Ref<EditorExportPlugin>> &customize_resources_plugins, LocalVector<Ref<EditorExportPlugin>> &customize_scenes_plugins, HashMap<String, FileExportCache> &export_cache, const String &export_base_path, bool p_force_save);
 
@@ -227,6 +229,7 @@ public:
 	virtual Ref<Texture2D> get_run_icon() const { return get_logo(); }
 
 	String test_etc2() const;
+	String test_bc() const;
 	bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const;
 	virtual bool has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const = 0;
 	virtual bool has_valid_project_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error) const = 0;

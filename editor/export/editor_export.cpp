@@ -45,6 +45,7 @@ void EditorExport::_save() {
 		config->set_value(section, "name", preset->get_name());
 		config->set_value(section, "platform", preset->get_platform()->get_name());
 		config->set_value(section, "runnable", preset->is_runnable());
+		config->set_value(section, "dedicated_server", preset->is_dedicated_server());
 		config->set_value(section, "custom_features", preset->get_custom_features());
 
 		bool save_files = false;
@@ -64,6 +65,11 @@ void EditorExport::_save() {
 				config->set_value(section, "export_filter", "exclude");
 				save_files = true;
 			} break;
+			case EditorExportPreset::EXPORT_CUSTOMIZED: {
+				config->set_value(section, "export_filter", "customized");
+				config->set_value(section, "customized_files", preset->get_customized_files());
+				save_files = false;
+			};
 		}
 
 		if (save_files) {
@@ -123,10 +129,20 @@ void EditorExport::add_export_preset(const Ref<EditorExportPreset> &p_preset, in
 }
 
 String EditorExportPlatform::test_etc2() const {
-	const bool etc2_supported = GLOBAL_GET("rendering/textures/vram_compression/import_etc2");
+	const bool etc2_supported = GLOBAL_GET("rendering/textures/vram_compression/import_etc2_astc");
 
 	if (!etc2_supported) {
-		return TTR("Target platform requires 'ETC2' texture compression. Enable 'Import Etc 2' in Project Settings.");
+		return TTR("Target platform requires 'ETC2/ASTC' texture compression. Enable 'Import ETC2 ASTC' in Project Settings.");
+	}
+
+	return String();
+}
+
+String EditorExportPlatform::test_bc() const {
+	const bool bc_supported = GLOBAL_GET("rendering/textures/vram_compression/import_s3tc_bptc");
+
+	if (!bc_supported) {
+		return TTR("Target platform requires 'S3TC/BPTC' texture compression. Enable 'Import S3TC BPTC' in Project Settings.");
 	}
 
 	return String();
@@ -213,6 +229,7 @@ void EditorExport::load_config() {
 
 		preset->set_name(config->get_value(section, "name"));
 		preset->set_runnable(config->get_value(section, "runnable"));
+		preset->set_dedicated_server(config->get_value(section, "dedicated_server", false));
 
 		if (config->has_section_key(section, "custom_features")) {
 			preset->set_custom_features(config->get_value(section, "custom_features"));
@@ -233,6 +250,10 @@ void EditorExport::load_config() {
 		} else if (export_filter == "exclude") {
 			preset->set_export_filter(EditorExportPreset::EXCLUDE_SELECTED_RESOURCES);
 			get_files = true;
+		} else if (export_filter == "customized") {
+			preset->set_export_filter(EditorExportPreset::EXPORT_CUSTOMIZED);
+			preset->set_customized_files(config->get_value(section, "customized_files", Dictionary()));
+			get_files = false;
 		}
 
 		if (get_files) {

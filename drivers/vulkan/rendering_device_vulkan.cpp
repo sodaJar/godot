@@ -1666,34 +1666,27 @@ RID RenderingDeviceVulkan::texture_create(const TextureFormat &p_format, const T
 	image_create_info.pNext = nullptr;
 	image_create_info.flags = 0;
 
-	// TODO: Check for support via RenderingDevice to enable on mobile when possible.
-
-#ifndef ANDROID_ENABLED
-
-	// vkCreateImage fails with format list on Android (VK_ERROR_OUT_OF_HOST_MEMORY)
 	VkImageFormatListCreateInfoKHR format_list_create_info; // Keep out of the if, needed for creation.
 	Vector<VkFormat> allowed_formats; // Keep out of the if, needed for creation.
-#endif
 	if (p_format.shareable_formats.size()) {
 		image_create_info.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
 
-#ifndef ANDROID_ENABLED
+		if (context->is_device_extension_enabled(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME)) {
+			for (int i = 0; i < p_format.shareable_formats.size(); i++) {
+				allowed_formats.push_back(vulkan_formats[p_format.shareable_formats[i]]);
+			}
 
-		for (int i = 0; i < p_format.shareable_formats.size(); i++) {
-			allowed_formats.push_back(vulkan_formats[p_format.shareable_formats[i]]);
+			format_list_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR;
+			format_list_create_info.pNext = nullptr;
+			format_list_create_info.viewFormatCount = allowed_formats.size();
+			format_list_create_info.pViewFormats = allowed_formats.ptr();
+			image_create_info.pNext = &format_list_create_info;
+
+			ERR_FAIL_COND_V_MSG(p_format.shareable_formats.find(p_format.format) == -1, RID(),
+					"If supplied a list of shareable formats, the current format must be present in the list");
+			ERR_FAIL_COND_V_MSG(p_view.format_override != DATA_FORMAT_MAX && p_format.shareable_formats.find(p_view.format_override) == -1, RID(),
+					"If supplied a list of shareable formats, the current view format override must be present in the list");
 		}
-
-		format_list_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR;
-		format_list_create_info.pNext = nullptr;
-		format_list_create_info.viewFormatCount = allowed_formats.size();
-		format_list_create_info.pViewFormats = allowed_formats.ptr();
-		image_create_info.pNext = &format_list_create_info;
-
-		ERR_FAIL_COND_V_MSG(p_format.shareable_formats.find(p_format.format) == -1, RID(),
-				"If supplied a list of shareable formats, the current format must be present in the list");
-		ERR_FAIL_COND_V_MSG(p_view.format_override != DATA_FORMAT_MAX && p_format.shareable_formats.find(p_view.format_override) == -1, RID(),
-				"If supplied a list of shareable formats, the current view format override must be present in the list");
-#endif
 	}
 
 	if (p_format.texture_type == TEXTURE_TYPE_CUBE || p_format.texture_type == TEXTURE_TYPE_CUBE_ARRAY) {
@@ -2096,49 +2089,54 @@ RID RenderingDeviceVulkan::texture_create_shared(const TextureView &p_view, RID 
 	}
 
 	VkImageViewUsageCreateInfo usage_info;
-	usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
-	usage_info.pNext = nullptr;
-	if (p_view.format_override != DATA_FORMAT_MAX) {
-		// Need to validate usage with vulkan.
+	if (context->is_device_extension_enabled(VK_KHR_MAINTENANCE_2_EXTENSION_NAME)) {
+		// May need to make VK_KHR_maintenance2 manditory and thus has Vulkan 1.1 be our minimum supported version
+		// if we require setting this information. Vulkan 1.0 may simply not care..
 
-		usage_info.usage = 0;
+		usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+		usage_info.pNext = nullptr;
+		if (p_view.format_override != DATA_FORMAT_MAX) {
+			// Need to validate usage with vulkan.
 
-		if (texture.usage_flags & TEXTURE_USAGE_SAMPLING_BIT) {
-			usage_info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
-		}
+			usage_info.usage = 0;
 
-		if (texture.usage_flags & TEXTURE_USAGE_STORAGE_BIT) {
-			if (texture_is_format_supported_for_usage(p_view.format_override, TEXTURE_USAGE_STORAGE_BIT)) {
-				usage_info.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+			if (texture.usage_flags & TEXTURE_USAGE_SAMPLING_BIT) {
+				usage_info.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
 			}
-		}
 
-		if (texture.usage_flags & TEXTURE_USAGE_COLOR_ATTACHMENT_BIT) {
-			if (texture_is_format_supported_for_usage(p_view.format_override, TEXTURE_USAGE_COLOR_ATTACHMENT_BIT)) {
-				usage_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+			if (texture.usage_flags & TEXTURE_USAGE_STORAGE_BIT) {
+				if (texture_is_format_supported_for_usage(p_view.format_override, TEXTURE_USAGE_STORAGE_BIT)) {
+					usage_info.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+				}
 			}
-		}
 
-		if (texture.usage_flags & TEXTURE_USAGE_INPUT_ATTACHMENT_BIT) {
-			usage_info.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-		}
+			if (texture.usage_flags & TEXTURE_USAGE_COLOR_ATTACHMENT_BIT) {
+				if (texture_is_format_supported_for_usage(p_view.format_override, TEXTURE_USAGE_COLOR_ATTACHMENT_BIT)) {
+					usage_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+				}
+			}
 
-		if (texture.usage_flags & TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) {
-			usage_info.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-		}
+			if (texture.usage_flags & TEXTURE_USAGE_INPUT_ATTACHMENT_BIT) {
+				usage_info.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+			}
 
-		if (texture.usage_flags & TEXTURE_USAGE_CAN_UPDATE_BIT) {
-			usage_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		}
-		if (texture.usage_flags & TEXTURE_USAGE_CAN_COPY_FROM_BIT) {
-			usage_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-		}
+			if (texture.usage_flags & TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+				usage_info.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+			}
 
-		if (texture.usage_flags & TEXTURE_USAGE_CAN_COPY_TO_BIT) {
-			usage_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		}
+			if (texture.usage_flags & TEXTURE_USAGE_CAN_UPDATE_BIT) {
+				usage_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			}
+			if (texture.usage_flags & TEXTURE_USAGE_CAN_COPY_FROM_BIT) {
+				usage_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+			}
 
-		image_view_create_info.pNext = &usage_info;
+			if (texture.usage_flags & TEXTURE_USAGE_CAN_COPY_TO_BIT) {
+				usage_info.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			}
+
+			image_view_create_info.pNext = &usage_info;
+		}
 	}
 
 	VkResult err = vkCreateImageView(device, &image_view_create_info, nullptr, &texture.view);
@@ -2296,7 +2294,7 @@ RID RenderingDeviceVulkan::texture_create_from_extension(TextureType p_type, Dat
 	return id;
 }
 
-RID RenderingDeviceVulkan::texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps, TextureSliceType p_slice_type) {
+RID RenderingDeviceVulkan::texture_create_shared_from_slice(const TextureView &p_view, RID p_with_texture, uint32_t p_layer, uint32_t p_mipmap, uint32_t p_mipmaps, TextureSliceType p_slice_type, uint32_t p_layers) {
 	_THREAD_SAFE_METHOD_
 
 	Texture *src_texture = texture_owner.get_or_null(p_with_texture);
@@ -2324,7 +2322,11 @@ RID RenderingDeviceVulkan::texture_create_shared_from_slice(const TextureView &p
 	ERR_FAIL_UNSIGNED_INDEX_V(p_layer, src_texture->layers, RID());
 
 	int slice_layers = 1;
-	if (p_slice_type == TEXTURE_SLICE_2D_ARRAY) {
+	if (p_layers != 0) {
+		ERR_FAIL_COND_V_MSG(p_layers > 1 && p_slice_type != TEXTURE_SLICE_2D_ARRAY, RID(), "layer slicing only supported for 2D arrays");
+		ERR_FAIL_COND_V_MSG(p_layer + p_layers > src_texture->layers, RID(), "layer slice is out of bounds");
+		slice_layers = p_layers;
+	} else if (p_slice_type == TEXTURE_SLICE_2D_ARRAY) {
 		ERR_FAIL_COND_V_MSG(p_layer != 0, RID(), "layer must be 0 when obtaining a 2D array mipmap slice");
 		slice_layers = src_texture->layers;
 	} else if (p_slice_type == TEXTURE_SLICE_CUBEMAP) {
@@ -4278,7 +4280,7 @@ RID RenderingDeviceVulkan::sampler_create(const SamplerState &p_state) {
 	sampler_create_info.addressModeW = address_modes[p_state.repeat_w];
 
 	sampler_create_info.mipLodBias = p_state.lod_bias;
-	sampler_create_info.anisotropyEnable = p_state.use_anisotropy;
+	sampler_create_info.anisotropyEnable = p_state.use_anisotropy && context->get_physical_device_features().samplerAnisotropy;
 	sampler_create_info.maxAnisotropy = p_state.anisotropy_max;
 	sampler_create_info.compareEnable = p_state.enable_compare;
 
@@ -5925,7 +5927,7 @@ Error RenderingDeviceVulkan::buffer_clear(RID p_buffer, uint32_t p_offset, uint3
 	return OK;
 }
 
-Vector<uint8_t> RenderingDeviceVulkan::buffer_get_data(RID p_buffer) {
+Vector<uint8_t> RenderingDeviceVulkan::buffer_get_data(RID p_buffer, uint32_t p_offset, uint32_t p_size) {
 	_THREAD_SAFE_METHOD_
 
 	// It could be this buffer was just created.
@@ -5942,12 +5944,20 @@ Vector<uint8_t> RenderingDeviceVulkan::buffer_get_data(RID p_buffer) {
 
 	VkCommandBuffer command_buffer = frames[frame].setup_command_buffer;
 
+	// Size of buffer to retrieve.
+	if (!p_size) {
+		p_size = buffer->size;
+	} else {
+		ERR_FAIL_COND_V_MSG(p_size + p_offset > buffer->size, Vector<uint8_t>(),
+				"Size is larger than the buffer.");
+	}
+
 	Buffer tmp_buffer;
-	_buffer_allocate(&tmp_buffer, buffer->size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
+	_buffer_allocate(&tmp_buffer, p_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_HOST, VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT);
 	VkBufferCopy region;
-	region.srcOffset = 0;
+	region.srcOffset = p_offset;
 	region.dstOffset = 0;
-	region.size = buffer->size;
+	region.size = p_size;
 	vkCmdCopyBuffer(command_buffer, buffer->buffer, tmp_buffer.buffer, 1, &region); // Dst buffer is in CPU, but I wonder if src buffer needs a barrier for this.
 	// Flush everything so memory can be safely mapped.
 	_flush(true);
@@ -5958,9 +5968,9 @@ Vector<uint8_t> RenderingDeviceVulkan::buffer_get_data(RID p_buffer) {
 
 	Vector<uint8_t> buffer_data;
 	{
-		buffer_data.resize(buffer->size);
+		buffer_data.resize(p_size);
 		uint8_t *w = buffer_data.ptrw();
-		memcpy(w, buffer_mem, buffer->size);
+		memcpy(w, buffer_mem, p_size);
 	}
 
 	vmaUnmapMemory(allocator, tmp_buffer.allocation);
@@ -9368,11 +9378,11 @@ bool RenderingDeviceVulkan::has_feature(const Features p_feature) const {
 			return multiview_capabilies.is_supported && multiview_capabilies.max_view_count > 1;
 		} break;
 		case SUPPORTS_FSR_HALF_FLOAT: {
-			return context->get_shader_capabilities().shader_float16_is_supported && context->get_storage_buffer_capabilities().storage_buffer_16_bit_access_is_supported;
+			return context->get_shader_capabilities().shader_float16_is_supported && context->get_physical_device_features().shaderInt16 && context->get_storage_buffer_capabilities().storage_buffer_16_bit_access_is_supported;
 		} break;
 		case SUPPORTS_ATTACHMENT_VRS: {
 			VulkanContext::VRSCapabilities vrs_capabilities = context->get_vrs_capabilities();
-			return vrs_capabilities.attachment_vrs_supported;
+			return vrs_capabilities.attachment_vrs_supported && context->get_physical_device_features().shaderStorageImageExtendedFormats;
 		} break;
 		default: {
 			return false;

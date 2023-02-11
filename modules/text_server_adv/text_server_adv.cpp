@@ -443,19 +443,11 @@ bool TextServerAdvanced::_load_support_data(const String &p_filename) {
 }
 
 String TextServerAdvanced::_get_support_data_filename() const {
-#ifdef ICU_STATIC_DATA
 	return _MKSTR(ICU_DATA_NAME);
-#else
-	return String();
-#endif
 }
 
 String TextServerAdvanced::_get_support_data_info() const {
-#ifdef ICU_STATIC_DATA
 	return String("ICU break iteration data (") + _MKSTR(ICU_DATA_NAME) + String(").");
-#else
-	return String();
-#endif
 }
 
 bool TextServerAdvanced::_save_support_data(const String &p_filename) const {
@@ -4076,7 +4068,6 @@ void TextServerAdvanced::_realign(ShapedTextDataAdvanced *p_sd) const {
 
 RID TextServerAdvanced::_shaped_text_substr(const RID &p_shaped, int64_t p_start, int64_t p_length) const {
 	_THREAD_SAFE_METHOD_
-
 	const ShapedTextDataAdvanced *sd = shaped_owner.get_or_null(p_shaped);
 	ERR_FAIL_COND_V(!sd, RID());
 
@@ -5521,6 +5512,7 @@ void TextServerAdvanced::_shape_run(ShapedTextDataAdvanced *p_sd, int64_t p_star
 }
 
 bool TextServerAdvanced::_shaped_text_shape(const RID &p_shaped) {
+	_THREAD_SAFE_METHOD_
 	ShapedTextDataAdvanced *sd = shaped_owner.get_or_null(p_shaped);
 	ERR_FAIL_COND_V(!sd, false);
 
@@ -6114,6 +6106,11 @@ String TextServerAdvanced::_percent_sign(const String &p_language) const {
 }
 
 int64_t TextServerAdvanced::_is_confusable(const String &p_string, const PackedStringArray &p_dict) const {
+#ifndef ICU_STATIC_DATA
+	if (!icu_data_loaded) {
+		return -1;
+	}
+#endif
 	UErrorCode status = U_ZERO_ERROR;
 	int64_t match_index = -1;
 
@@ -6121,20 +6118,22 @@ int64_t TextServerAdvanced::_is_confusable(const String &p_string, const PackedS
 	Vector<UChar *> skeletons;
 	skeletons.resize(p_dict.size());
 
-	USpoofChecker *sc = uspoof_open(&status);
-	uspoof_setChecks(sc, USPOOF_CONFUSABLE, &status);
+	if (sc_conf == nullptr) {
+		sc_conf = uspoof_open(&status);
+		uspoof_setChecks(sc_conf, USPOOF_CONFUSABLE, &status);
+	}
 	for (int i = 0; i < p_dict.size(); i++) {
 		Char16String word = p_dict[i].utf16();
-		int32_t len = uspoof_getSkeleton(sc, 0, word.get_data(), -1, NULL, 0, &status);
+		int32_t len = uspoof_getSkeleton(sc_conf, 0, word.get_data(), -1, NULL, 0, &status);
 		skeletons.write[i] = (UChar *)memalloc(++len * sizeof(UChar));
 		status = U_ZERO_ERROR;
-		uspoof_getSkeleton(sc, 0, word.get_data(), -1, skeletons.write[i], len, &status);
+		uspoof_getSkeleton(sc_conf, 0, word.get_data(), -1, skeletons.write[i], len, &status);
 	}
 
-	int32_t len = uspoof_getSkeleton(sc, 0, utf16.get_data(), -1, NULL, 0, &status);
+	int32_t len = uspoof_getSkeleton(sc_conf, 0, utf16.get_data(), -1, NULL, 0, &status);
 	UChar *skel = (UChar *)memalloc(++len * sizeof(UChar));
 	status = U_ZERO_ERROR;
-	uspoof_getSkeleton(sc, 0, utf16.get_data(), -1, skel, len, &status);
+	uspoof_getSkeleton(sc_conf, 0, utf16.get_data(), -1, skel, len, &status);
 	for (int i = 0; i < skeletons.size(); i++) {
 		if (u_strcmp(skel, skeletons[i]) == 0) {
 			match_index = i;
@@ -6146,7 +6145,6 @@ int64_t TextServerAdvanced::_is_confusable(const String &p_string, const PackedS
 	for (int i = 0; i < skeletons.size(); i++) {
 		memfree(skeletons.write[i]);
 	}
-	uspoof_close(sc);
 
 	ERR_FAIL_COND_V_MSG(U_FAILURE(status), -1, u_errorName(status));
 
@@ -6154,28 +6152,37 @@ int64_t TextServerAdvanced::_is_confusable(const String &p_string, const PackedS
 }
 
 bool TextServerAdvanced::_spoof_check(const String &p_string) const {
+#ifndef ICU_STATIC_DATA
+	if (!icu_data_loaded) {
+		return false;
+	}
+#endif
 	UErrorCode status = U_ZERO_ERROR;
 	Char16String utf16 = p_string.utf16();
 
-	USet *allowed = uset_openEmpty();
-	uset_addAll(allowed, uspoof_getRecommendedSet(&status));
-	uset_addAll(allowed, uspoof_getInclusionSet(&status));
+	if (allowed == nullptr) {
+		allowed = uset_openEmpty();
+		uset_addAll(allowed, uspoof_getRecommendedSet(&status));
+		uset_addAll(allowed, uspoof_getInclusionSet(&status));
+	}
+	if (sc_spoof == nullptr) {
+		sc_spoof = uspoof_open(&status);
+		uspoof_setAllowedChars(sc_spoof, allowed, &status);
+		uspoof_setRestrictionLevel(sc_spoof, USPOOF_MODERATELY_RESTRICTIVE);
+	}
 
-	USpoofChecker *sc = uspoof_open(&status);
-	uspoof_setAllowedChars(sc, allowed, &status);
-	uspoof_setRestrictionLevel(sc, USPOOF_MODERATELY_RESTRICTIVE);
-
-	int32_t bitmask = uspoof_check(sc, utf16.get_data(), -1, NULL, &status);
-
-	uspoof_close(sc);
-	uset_close(allowed);
-
+	int32_t bitmask = uspoof_check(sc_spoof, utf16.get_data(), -1, NULL, &status);
 	ERR_FAIL_COND_V_MSG(U_FAILURE(status), false, u_errorName(status));
 
 	return (bitmask != 0);
 }
 
 String TextServerAdvanced::_strip_diacritics(const String &p_string) const {
+#ifndef ICU_STATIC_DATA
+	if (!icu_data_loaded) {
+		return TextServer::strip_diacritics(p_string);
+	}
+#endif
 	UErrorCode err = U_ZERO_ERROR;
 
 	// Get NFKD normalizer singleton.
@@ -6213,6 +6220,12 @@ String TextServerAdvanced::_strip_diacritics(const String &p_string) const {
 }
 
 String TextServerAdvanced::_string_to_upper(const String &p_string, const String &p_language) const {
+#ifndef ICU_STATIC_DATA
+	if (!icu_data_loaded) {
+		return p_string.to_upper();
+	}
+#endif
+
 	if (p_string.is_empty()) {
 		return p_string;
 	}
@@ -6235,6 +6248,12 @@ String TextServerAdvanced::_string_to_upper(const String &p_string, const String
 }
 
 String TextServerAdvanced::_string_to_lower(const String &p_string, const String &p_language) const {
+#ifndef ICU_STATIC_DATA
+	if (!icu_data_loaded) {
+		return p_string.to_lower();
+	}
+#endif
+
 	if (p_string.is_empty()) {
 		return p_string;
 	}
@@ -6270,8 +6289,8 @@ PackedInt32Array TextServerAdvanced::_string_get_word_breaks(const String &p_str
 				breaks.insert(pos);
 			}
 		}
+		ubrk_close(bi);
 	}
-	ubrk_close(bi);
 
 	PackedInt32Array ret;
 
@@ -6352,6 +6371,13 @@ PackedInt32Array TextServerAdvanced::_string_get_word_breaks(const String &p_str
 }
 
 bool TextServerAdvanced::_is_valid_identifier(const String &p_string) const {
+#ifndef ICU_STATIC_DATA
+	if (!icu_data_loaded) {
+		WARN_PRINT_ONCE("ICU data is not loaded, Unicode security and spoofing detection disabled.");
+		return TextServer::is_valid_identifier(p_string);
+	}
+#endif
+
 	enum UAX31SequenceStatus {
 		SEQ_NOT_STARTED,
 		SEQ_STARTED,
@@ -6543,6 +6569,7 @@ TextServerAdvanced::TextServerAdvanced() {
 }
 
 void TextServerAdvanced::_cleanup() {
+	_THREAD_SAFE_METHOD_
 	for (const KeyValue<SystemFontKey, SystemFontCache> &E : system_fonts) {
 		const Vector<SystemFontCacheRec> &sysf_cache = E.value.var;
 		for (const SystemFontCacheRec &F : sysf_cache) {
@@ -6560,5 +6587,17 @@ TextServerAdvanced::~TextServerAdvanced() {
 		FT_Done_FreeType(ft_library);
 	}
 #endif
+	if (sc_spoof != nullptr) {
+		uspoof_close(sc_spoof);
+		sc_spoof = nullptr;
+	}
+	if (sc_conf != nullptr) {
+		uspoof_close(sc_conf);
+		sc_conf = nullptr;
+	}
+	if (allowed != nullptr) {
+		uset_close(allowed);
+		allowed = nullptr;
+	}
 	u_cleanup();
 }

@@ -343,6 +343,24 @@ void EditorExportPlatform::_export_find_resources(EditorFileSystemDirectory *p_d
 	}
 }
 
+void EditorExportPlatform::_export_find_customized_resources(const Ref<EditorExportPreset> &p_preset, EditorFileSystemDirectory *p_dir, EditorExportPreset::FileExportMode p_mode, HashSet<String> &p_paths) {
+	for (int i = 0; i < p_dir->get_subdir_count(); i++) {
+		EditorFileSystemDirectory *subdir = p_dir->get_subdir(i);
+		_export_find_customized_resources(p_preset, subdir, p_preset->get_file_export_mode(subdir->get_path(), p_mode), p_paths);
+	}
+
+	for (int i = 0; i < p_dir->get_file_count(); i++) {
+		if (p_dir->get_file_type(i) == "TextFile") {
+			continue;
+		}
+		String path = p_dir->get_file_path(i);
+		EditorExportPreset::FileExportMode file_mode = p_preset->get_file_export_mode(path, p_mode);
+		if (file_mode != EditorExportPreset::MODE_FILE_REMOVE) {
+			p_paths.insert(path);
+		}
+	}
+}
+
 void EditorExportPlatform::_export_find_dependencies(const String &p_path, HashSet<String> &p_paths) {
 	if (p_paths.has(p_path)) {
 		return;
@@ -639,10 +657,20 @@ bool EditorExportPlatform::_export_customize_object(Object *p_object, LocalVecto
 	return changed;
 }
 
+bool EditorExportPlatform::_is_editable_ancestor(Node *p_root, Node *p_node) {
+	while (p_node != nullptr && p_node != p_root) {
+		if (p_root->is_editable_instance(p_node)) {
+			return true;
+		}
+		p_node = p_node->get_owner();
+	}
+	return false;
+}
+
 bool EditorExportPlatform::_export_customize_scene_resources(Node *p_root, Node *p_node, LocalVector<Ref<EditorExportPlugin>> &customize_resources_plugins) {
 	bool changed = false;
 
-	if (p_node == p_root || p_node->get_owner() == p_root) {
+	if (p_root == p_node || p_node->get_owner() == p_root || _is_editable_ancestor(p_root, p_node)) {
 		if (_export_customize_object(p_node, customize_resources_plugins)) {
 			changed = true;
 		}
@@ -786,7 +814,7 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 	HashSet<String> paths;
 	Vector<String> path_remaps;
 
-	paths.insert(ProjectSettings::get_singleton()->get_project_data_path().path_join("global_script_class_cache.cfg"));
+	paths.insert(ProjectSettings::get_singleton()->get_global_class_list_path());
 	if (p_preset->get_export_filter() == EditorExportPreset::EXPORT_ALL_RESOURCES) {
 		//find stuff
 		_export_find_resources(EditorFileSystem::get_singleton()->get_filesystem(), paths);
@@ -796,6 +824,8 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 		for (int i = 0; i < files.size(); i++) {
 			paths.erase(files[i]);
 		}
+	} else if (p_preset->get_export_filter() == EditorExportPreset::EXPORT_CUSTOMIZED) {
+		_export_find_customized_resources(p_preset, EditorFileSystem::get_singleton()->get_filesystem(), p_preset->get_file_export_mode("res://"), paths);
 	} else {
 		bool scenes_only = p_preset->get_export_filter() == EditorExportPreset::EXPORT_SELECTED_SCENES;
 
@@ -939,14 +969,14 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 	LocalVector<Ref<EditorExportPlugin>> customize_scenes_plugins;
 
 	for (int i = 0; i < export_plugins.size(); i++) {
-		if (export_plugins[i]->_begin_customize_resources(Ref<EditorExportPlatform>(this), features_psa)) {
+		if (export_plugins.write[i]->_begin_customize_resources(Ref<EditorExportPlatform>(this), features_psa)) {
 			customize_resources_plugins.push_back(export_plugins[i]);
 
 			custom_resources_hash = hash_murmur3_one_64(export_plugins[i]->_get_name().hash64(), custom_resources_hash);
 			uint64_t hash = export_plugins[i]->_get_customization_configuration_hash();
 			custom_resources_hash = hash_murmur3_one_64(hash, custom_resources_hash);
 		}
-		if (export_plugins[i]->_begin_customize_scenes(Ref<EditorExportPlatform>(this), features_psa)) {
+		if (export_plugins.write[i]->_begin_customize_scenes(Ref<EditorExportPlatform>(this), features_psa)) {
 			customize_scenes_plugins.push_back(export_plugins[i]);
 
 			custom_resources_hash = hash_murmur3_one_64(export_plugins[i]->_get_name().hash64(), custom_resources_hash);
@@ -1218,6 +1248,9 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 			}
 		}
 	}
+	for (int i = 0; i < export_plugins.size(); i++) {
+		custom_list.append_array(export_plugins[i]->_get_export_features(Ref<EditorExportPlatform>(this), p_debug));
+	}
 
 	ProjectSettings::CustomMap custom_map;
 	if (path_remaps.size()) {
@@ -1294,7 +1327,9 @@ Error EditorExportPlatform::export_project_files(const Ref<EditorExportPreset> &
 			} else {
 				// Use default text server data.
 				String icu_data_file = EditorPaths::get_singleton()->get_cache_dir().path_join("tmp_icu_data");
-				TS->save_support_data(icu_data_file);
+				if (!TS->save_support_data(icu_data_file)) {
+					return ERR_INVALID_DATA;
+				}
 				Vector<uint8_t> array = FileAccess::get_file_as_bytes(icu_data_file);
 				err = p_func(p_udata, ts_data, array, idx, total, enc_in_filters, enc_ex_filters, key);
 				DirAccess::remove_file_or_error(icu_data_file);
@@ -1767,6 +1802,13 @@ Error EditorExportPlatform::ssh_run_on_remote(const String &p_host, const String
 	List<String> args;
 	args.push_back("-p");
 	args.push_back(p_port);
+	args.push_back("-q");
+	args.push_back("-o");
+	args.push_back("LogLevel=error");
+	args.push_back("-o");
+	args.push_back("BatchMode=yes");
+	args.push_back("-o");
+	args.push_back("StrictHostKeyChecking=no");
 	for (const String &E : p_ssh_args) {
 		args.push_back(E);
 	}
@@ -1817,6 +1859,13 @@ Error EditorExportPlatform::ssh_run_on_remote_no_wait(const String &p_host, cons
 	List<String> args;
 	args.push_back("-p");
 	args.push_back(p_port);
+	args.push_back("-q");
+	args.push_back("-o");
+	args.push_back("LogLevel=error");
+	args.push_back("-o");
+	args.push_back("BatchMode=yes");
+	args.push_back("-o");
+	args.push_back("StrictHostKeyChecking=no");
 	for (const String &E : p_ssh_args) {
 		args.push_back(E);
 	}
@@ -1847,6 +1896,13 @@ Error EditorExportPlatform::ssh_push_to_remote(const String &p_host, const Strin
 	List<String> args;
 	args.push_back("-P");
 	args.push_back(p_port);
+	args.push_back("-q");
+	args.push_back("-o");
+	args.push_back("LogLevel=error");
+	args.push_back("-o");
+	args.push_back("BatchMode=yes");
+	args.push_back("-o");
+	args.push_back("StrictHostKeyChecking=no");
 	for (const String &E : p_scp_args) {
 		args.push_back(E);
 	}

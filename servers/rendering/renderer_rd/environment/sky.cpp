@@ -347,7 +347,10 @@ void SkyRD::ReflectionData::update_reflection_data(int p_size, int p_mipmaps, bo
 	tf.texture_type = RD::TEXTURE_TYPE_CUBE;
 	tf.array_layers = 6;
 	tf.mipmaps = p_low_quality ? 7 : mipmaps - 1;
-	tf.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+	tf.usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+	if (RendererSceneRenderRD::get_singleton()->_render_buffers_can_be_storage()) {
+		tf.usage_bits |= RD::TEXTURE_USAGE_STORAGE_BIT;
+	}
 
 	downsampled_radiance_cubemap = RD::get_singleton()->texture_create(tf, RD::TextureView());
 	RD::get_singleton()->set_resource_name(downsampled_radiance_cubemap, "downsampled radiance cubemap");
@@ -571,7 +574,7 @@ RID SkyRD::Sky::get_textures(SkyTextureSetVersion p_version, RID p_default_shade
 		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
 		u.binding = 1; // half res
 		if (p_version >= SKY_TEXTURE_SET_CUBEMAP) {
-			if (reflection.layers[0].views[1].is_valid() && p_version != SKY_TEXTURE_SET_CUBEMAP_HALF_RES) {
+			if (reflection.layers.size() && reflection.layers[0].views.size() >= 2 && reflection.layers[0].views[1].is_valid() && p_version != SKY_TEXTURE_SET_CUBEMAP_HALF_RES) {
 				u.append_id(reflection.layers[0].views[1]);
 			} else {
 				u.append_id(texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_CUBEMAP_BLACK));
@@ -591,7 +594,7 @@ RID SkyRD::Sky::get_textures(SkyTextureSetVersion p_version, RID p_default_shade
 		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
 		u.binding = 2; // quarter res
 		if (p_version >= SKY_TEXTURE_SET_CUBEMAP) {
-			if (reflection.layers[0].views[2].is_valid() && p_version != SKY_TEXTURE_SET_CUBEMAP_QUARTER_RES) {
+			if (reflection.layers.size() && reflection.layers[0].views.size() >= 3 && reflection.layers[0].views[2].is_valid() && p_version != SKY_TEXTURE_SET_CUBEMAP_QUARTER_RES) {
 				u.append_id(reflection.layers[0].views[2]);
 			} else {
 				u.append_id(texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_CUBEMAP_BLACK));
@@ -1320,7 +1323,7 @@ void SkyRD::update_radiance_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, 
 
 		// Note, we ignore environment_get_sky_orientation here as this is applied when we do our lookup in our scene shader.
 
-		if (shader_data->uses_quarter_res) {
+		if (shader_data->uses_quarter_res && roughness_layers >= 3) {
 			RD::get_singleton()->draw_command_begin_label("Render Sky to Quarter Res Cubemap");
 			PipelineCacheRD *pipeline = &shader_data->pipelines[SKY_VERSION_CUBEMAP_QUARTER_RES];
 
@@ -1337,9 +1340,11 @@ void SkyRD::update_radiance_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, 
 				RD::get_singleton()->draw_list_end();
 			}
 			RD::get_singleton()->draw_command_end_label();
+		} else if (shader_data->uses_quarter_res && roughness_layers < 3) {
+			ERR_PRINT_ED("Cannot use quarter res buffer in sky shader when roughness layers is less than 3. Please increase rendering/reflections/sky_reflections/roughness_layers.");
 		}
 
-		if (shader_data->uses_half_res) {
+		if (shader_data->uses_half_res && roughness_layers >= 2) {
 			RD::get_singleton()->draw_command_begin_label("Render Sky to Half Res Cubemap");
 			PipelineCacheRD *pipeline = &shader_data->pipelines[SKY_VERSION_CUBEMAP_HALF_RES];
 
@@ -1356,6 +1361,8 @@ void SkyRD::update_radiance_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, 
 				RD::get_singleton()->draw_list_end();
 			}
 			RD::get_singleton()->draw_command_end_label();
+		} else if (shader_data->uses_half_res && roughness_layers < 2) {
+			ERR_PRINT_ED("Cannot use half res buffer in sky shader when roughness layers is less than 2. Please increase rendering/reflections/sky_reflections/roughness_layers.");
 		}
 
 		RD::DrawListID cubemap_draw_list;
@@ -1627,7 +1634,10 @@ void SkyRD::update_dirty_skys() {
 				tf.mipmaps = mipmaps;
 				tf.width = w;
 				tf.height = h;
-				tf.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
+				tf.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
+				if (RendererSceneRenderRD::get_singleton()->_render_buffers_can_be_storage()) {
+					tf.usage_bits |= RD::TEXTURE_USAGE_STORAGE_BIT;
+				}
 
 				sky->radiance = RD::get_singleton()->texture_create(tf, RD::TextureView());
 
@@ -1642,7 +1652,10 @@ void SkyRD::update_dirty_skys() {
 				tf.mipmaps = MIN(mipmaps, layers);
 				tf.width = w;
 				tf.height = h;
-				tf.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT;
+				tf.usage_bits = RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT;
+				if (RendererSceneRenderRD::get_singleton()->_render_buffers_can_be_storage()) {
+					tf.usage_bits |= RD::TEXTURE_USAGE_STORAGE_BIT;
+				}
 
 				sky->radiance = RD::get_singleton()->texture_create(tf, RD::TextureView());
 
